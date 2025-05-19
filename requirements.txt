@@ -1,0 +1,14 @@
+torch>=1.7
+torchvision
+opencv-python
+pyttsx3
+PyQt5
+numpy
+matplotlib
+pillow
+tqdm
+scipy
+pandas
+seaborn
+requests
+onnx 
