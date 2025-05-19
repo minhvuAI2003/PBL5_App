@@ -59,7 +59,9 @@ python traffic_sign_detect_v5.py
 
 - Chọn nguồn video (Camera hoặc Video File).
 - Nhấn **Start** để bắt đầu nhận diện.
-- Nhấn **Start Recording** để ghi lại video nhận diện.
+- Nhấn **Start Recording** để bắt đầu ghi lại video nhận diện.
+- Nhấn **Stop Recording** để dừng ghi hình.
+- Nhấn **Stop** để dừng nhận diện và dừng video.
 - Xem thống kê và cảnh báo biển báo quan trọng ở panel bên phải.
 
 ## Lưu ý
