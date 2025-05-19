@@ -21,8 +21,8 @@
 1. **Clone dự án và cài đặt các thư viện cần thiết:**
 
 ```bash
-git clone <link-repo-cua-ban>
-cd <ten-thu-muc-du-an>
+git clone https://github.com/minhvuAI2003/PBL5_App.git
+cd PBL5_App
 pip install -r requirements.txt
 ```
 
@@ -35,21 +35,22 @@ git clone https://github.com/ultralytics/yolov5.git
 3. **Tải trọng số YOLOv5:**
 
 - Đặt file trọng số (ví dụ: `best_2.pt`) vào thư mục `weights/` (tạo mới nếu chưa có).
-- Bạn có thể huấn luyện hoặc tải sẵn từ [YOLOv5 releases](https://github.com/ultralytics/yolov5/releases).
 
 4. **Kiểm tra lại cấu trúc thư mục:**
 
-```
-<ten-thu-muc-du-an>/
-├── traffic_sign_detect_v5.py
-├── yolov5/
+PBL5_App/
+├── traffic_sign_detect_v5.py         # File chính chạy ứng dụng giao diện
+├── yolov5/                           # Thư mục mã nguồn YOLOv5
 │   ├── models/
 │   ├── utils/
 │   └── ...
-├── weights/
+├── weights/                          # Thư mục chứa file trọng số mô hình
 │   └── best_2.pt
-└── requirements.txt
-```
+├── recordings/                       # Thư mục lưu các video đã ghi lại
+│   └── detection_<ngày>_<giờ>.mp4
+├── sign_statistics.csv               # File lưu báo cáo các biển báo đã phát hiện
+├── requirements.txt                  # Danh sách thư viện cần cài đặt
+└── README.md 
 
 ## Chạy ứng dụng
 
@@ -64,11 +65,20 @@ python traffic_sign_detect_v5.py
 - Nhấn **Stop** để dừng nhận diện và dừng video.
 - Xem thống kê và cảnh báo biển báo quan trọng ở panel bên phải.
 
+## Xem lại kết quả và báo cáo
+
+- **Báo cáo biển báo đã phát hiện:**
+  - Tất cả các biển báo đã nhận diện sẽ được lưu vào file `sign_statistics.csv` trong thư mục gốc dự án. Bạn có thể mở file này bằng Excel hoặc bất kỳ phần mềm bảng tính nào để xem chi tiết thời gian, loại biển báo và số lượng.
+
+- **Xem lại video đã ghi:**
+  - Các video quá trình nhận diện được lưu tự động trong thư mục `recordings/`.
+  - Mỗi file video sẽ có tên dạng `detection_<ngày>_<giờ>.mp4`.
+
+- **Mã nguồn xử lý lưu báo cáo và video:**
+  - Xem chi tiết cách lưu báo cáo và video trong file `traffic_sign_detect_v5.py`.
+
 ## Lưu ý
-
-- Nếu chạy trên Mac M1/M2, hãy đảm bảo cài đúng phiên bản torch cho ARM.
 - Nếu gặp lỗi về PyQt5 plugin, thử cài đặt lại PyQt5 hoặc kiểm tra biến môi trường `QT_QPA_PLATFORM_PLUGIN_PATH`.
-
 
 
 ---
