@@ -11,4 +11,5 @@ scipy
 pandas
 seaborn
 requests
-onnx 
+onnx
+playsound==1.2.2 
