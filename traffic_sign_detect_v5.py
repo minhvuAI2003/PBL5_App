@@ -102,6 +102,22 @@ def play_sound_file(audio_path):
     except Exception as e:
         print(f"Error playing sound: {str(e)}")
 
+def create_multitracker():
+    if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'MultiTracker_create'):
+        return cv2.legacy.MultiTracker_create()
+    elif hasattr(cv2, 'MultiTracker_create'):
+        return cv2.MultiTracker_create()
+    else:
+        raise RuntimeError("OpenCV is missing MultiTracker_create. Please install opencv-contrib-python.")
+
+def create_tracker():
+    if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerKCF_create'):
+        return cv2.legacy.TrackerKCF_create()
+    elif hasattr(cv2, 'TrackerKCF_create'):
+        return cv2.TrackerKCF_create()
+    else:
+        raise RuntimeError("OpenCV is missing TrackerKCF_create. Please install opencv-contrib-python.")
+
 class TrafficSignDetector(QMainWindow):
     """
     Cửa sổ chính của ứng dụng nhận diện biển báo giao thông.
@@ -144,26 +160,31 @@ class TrafficSignDetector(QMainWindow):
         self.played_labels = {}  # Theo dõi thời gian phát âm thanh cuối cùng của mỗi biển báo
         self.cooldown = 5  # Thời gian chờ giữa các lần phát âm thanh (giây)
         
-        # Định nghĩa các biển báo quan trọng và tên tiếng Việt của chúng
-        # Các biển báo này sẽ kích hoạt cảnh báo âm thanh khi được phát hiện
-        self.important_signs = {
-            'cam re trai': 'CẤM RẼ TRÁI',
-            'cam re phai': 'CẤM RẼ PHẢI',
-            'cam do xe': 'CẤM ĐỖ XE',
-            'cam dung xe va do xe': 'CẤM DỪNG/ĐỖ XE',
-            'cam oto re trai': 'CẤM Ô TÔ RẼ TRÁI',
-            'cam bam coi': 'CẤM BẤM CÒI',
-            'cam xe may 2 banh': 'CẤM XE MÁY 2 BÁNH',
-            'cam di nguoc chieu': 'CẤM ĐI NGƯỢC CHIỀU',
-            'toc do toi da 40 km/h': 'TỐC ĐỘ TỐI ĐA 40 KM/H',
-            'toc do toi da 60 km/h': 'TỐC ĐỘ TỐI ĐA 60 KM/H',
-            'toc do toi da 80 km/h': 'TỐC ĐỘ TỐI ĐA 80 KM/H',
-            'cam quay dau': 'CẤM QUAY ĐẦU',
-            'tre em qua duong': 'TRẺ EM QUA ĐƯỜNG',
-            'duong giao nhau': 'ĐƯỜNG GIAO NHAU',
-            'giao nhau voi duong uu tien': 'GIAO NHAU VỚI ĐƯỜNG ƯU TIÊN',
-            'giao nhau voi duong khong uu tien': 'GIAO NHAU VỚI ĐƯỜNG KHÔNG ƯU TIÊN',
-            'noi giao nhau theo vong xuyen': 'GIAO NHAU VÒNG XUYÊN'
+        # Mapping tên class của model với tên file âm thanh
+        self.class_to_sound = {
+            'cam re trai': 'Cam re trai.wav',
+            'cam re phai': 'Cam re phai.wav',
+            'cam do xe': 'Cam do xe.wav',
+            'cam do xe ngay chan': 'Cam do xe ngay chan.wav',
+            'cam do xe ngay le': 'Cam do xe ngay le.wav',
+            'cam dung xe va do xe': 'Cam dung xe và do xe.wav',
+            'cam oto re trai': 'Cam oto re trai.wav',
+            'cam bam coi': 'Cam bam coi.wav',
+            'cam xe may 2 banh': 'Cam xe may 2 banh.wav',
+            'cam di nguoc chieu': 'Cam di nguoc chieu.wav',
+            'toc do toi da 40 km/h': '40kmh.wav',
+            'toc do toi da 60 km/h': '60kmh.wav',
+            'toc do toi da 80 km/h': '80kmh.wav',
+            'cam quay dau': 'Cam quay dau.wav',
+            'tre em qua duong': 'Tre em qua duong.wav',
+            'duong giao nhau': 'Duong giao nhau.wav',
+            'giao nhau voi duong uu tien': 'Giao nhau voi duong uu tien.wav',
+            'giao nhau voi duong khong uu tien': 'Giao nhau voi duong khong uu tien.wav',
+            'noi giao nhau theo vong xuyen': 'Noi giao nhau theo vong xuyen.wav',
+            'cho ngoac nguy hiem phia ban trai': 'Cho ngoac nguy hiem phia ban trai.wav',
+            'cho ngoac nguy hiem phia ben phai': 'Cho ngoac nguy hiem phia ben phai.wav',
+            'duong nguoi di bo cat ngang': 'Duong nguoi di bo cat ngang.wav',
+            'huong di thang phai theo': 'Huong di thang phai theo.wav'
         }
         
         # Khởi tạo giao diện người dùng
@@ -297,17 +318,8 @@ class TrafficSignDetector(QMainWindow):
         right_layout.addWidget(self.stats_label)
         self.stats_text = QTextEdit()
         self.stats_text.setReadOnly(True)
-        self.stats_text.setMaximumHeight(150)
+        self.stats_text.setMaximumHeight(200)
         right_layout.addWidget(self.stats_text)
-        
-        # Alerts display
-        self.alerts_label = QLabel("Important Sign Alerts:")
-        self.alerts_label.setStyleSheet('font-size: 17px; color: #ff5555; font-weight: bold;')
-        right_layout.addWidget(self.alerts_label)
-        self.alerts_text = QTextEdit()
-        self.alerts_text.setReadOnly(True)
-        self.alerts_text.setMaximumHeight(150)
-        right_layout.addWidget(self.alerts_text)
         
         # Add panels to main layout
         layout.addWidget(left_panel, stretch=2)
@@ -373,14 +385,14 @@ class TrafficSignDetector(QMainWindow):
                 self.record_button.setText("Start Recording")
             
     def update_statistics(self, detections):
-        DIST_THRESHOLD = 50  # pixel
+        DIST_THRESHOLD = 80  # Thay đổi threshold thành 80 pixel
         new_counts = []  # Lưu các biển báo vừa tăng count
         for det in detections:
             cls = int(det[-1])
             sign_name = self.model.names[cls]
             x1, y1, x2, y2 = det[:4]
-            cx = float(x1 + x2) / 2
-            cy = float(y1 + y2) / 2
+            cx = float(x1 + x2) / 2  # Tọa độ x trung tâm
+            cy = float(y1 + y2) / 2  # Tọa độ y trung tâm
             is_new = True
             for (px, py) in self.sign_positions[sign_name]:
                 if ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5 < DIST_THRESHOLD:
@@ -390,42 +402,28 @@ class TrafficSignDetector(QMainWindow):
                 self.sign_stats[sign_name] += 1
                 self.sign_positions[sign_name].append((cx, cy))
                 new_counts.append((sign_name, self.sign_stats[sign_name]))
+                
+                # Phát âm thanh cảnh báo cho biển báo mới
+                sign_name_lower = sign_name.lower()
+                sound_file = self.class_to_sound.get(sign_name_lower)
+                if sound_file:
+                    audio_path = os.path.abspath(os.path.join('sounds_wav', sound_file))
+                    print(f"Phát âm thanh cho biển báo: {sign_name} - File: {sound_file}")
+                    play_sound_file(audio_path)
+
         # Update statistics display
         stats_text = "Detected Signs:\n"
         for sign, count in self.sign_stats.items():
             stats_text += f"{sign}: {count}\n"
         self.stats_text.setText(stats_text)
-        # Chỉ ghi vào file khi count tăng
-        if new_counts:
-            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            with open('sign_statistics.csv', 'a', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                if csvfile.tell() == 0:
-                    writer.writerow(['Time', 'Sign', 'Count'])
-                for sign, count in new_counts:
-                    writer.writerow([now, sign, count])
-        # Check for important signs
-        alerts = []
-        current_time = time.time()
-        for det in detections:
-            cls = int(det[-1])
-            sign_name = self.model.names[cls].lower()
-            conf = float(det[-2])
-            for important_sign in self.important_signs:
-                if important_sign in sign_name and conf > 0.5:
-                    alert = f"ALERT: {self.important_signs[important_sign]} detected! (Confidence: {conf:.2f})"
-                    if alert not in alerts:
-                        alerts.append(alert)
-                        
-                        if (sign_name not in self.played_labels) or (current_time - self.played_labels[sign_name] > self.cooldown):
-                            # Chỉ phát âm thanh cho biển báo quan trọng
-                            if sign_name.lower() in self.important_signs:
-                                audio_path = os.path.abspath(os.path.join('sounds_wav', f"{sign_name}.wav"))
-                                print(f"Playing important sign sound: {audio_path}")
-                                play_sound_file(audio_path)
-                                self.played_labels[sign_name] = current_time
-        if alerts:
-            self.alerts_text.setText("\n".join(alerts))
+        # Ghi file nếu có biển báo mới
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open('sign_statistics.csv', 'a', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            if csvfile.tell() == 0:
+                writer.writerow(['Time', 'Sign', 'Count'])
+            for sign, count in self.sign_stats.items():
+                writer.writerow([now, sign, count])
         
     def start_detection(self):
         if self.source_combo.currentText() == "Camera":
@@ -455,7 +453,6 @@ class TrafficSignDetector(QMainWindow):
         self.sign_stats.clear()
         self.sign_positions.clear()
         self.stats_text.clear()
-        self.alerts_text.clear()
         
         # Start timer
         self.timer.start(30)  # 30ms = ~33 FPS
