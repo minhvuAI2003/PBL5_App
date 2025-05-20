@@ -1,22 +1,24 @@
+# Import các thư viện chuẩn của Python
+import os
 import sys
-import cv2
-import torch
+import csv
 import time
-import pyttsx3
+import threading
 from datetime import datetime
 from collections import defaultdict
+
+# Import các thư viện bên thứ ba
+import cv2
+import torch
+import numpy as np
+import pyttsx3
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QLabel, QPushButton, QComboBox, 
                            QFileDialog, QMessageBox, QTextEdit)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QImage, QPixmap
-import sys
-import os
-import csv
-import threading
-import numpy as np
 
-# Try to import playsound, if not available, use alternative
+# Thử import playsound để phát âm thanh
 try:
     from playsound import playsound
     HAS_PLAYSOUND = True
@@ -25,20 +27,34 @@ except ImportError:
     print("To enable audio playback, install playsound: pip install playsound==1.2.2")
     HAS_PLAYSOUND = False
 
-# Create recordings directory if it doesn't exist
-os.makedirs('recordings', exist_ok=True)
+# Tạo các thư mục cần thiết để lưu trữ
+os.makedirs('recordings', exist_ok=True)  # Thư mục lưu video ghi lại
+os.makedirs('sounds_wav', exist_ok=True)  # Thư mục chứa file âm thanh cảnh báo
 
+# Cấu hình đường dẫn plugin cho PyQt5
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = os.path.join(os.path.dirname(sys.modules["PyQt5"].__file__), "Qt5", "plugins")
-sys.path.append('yolov5')  # Add yolov5 directory to Python path
+
+# Thêm yolov5 vào đường dẫn Python và import các module cần thiết
+sys.path.append('yolov5')
 from yolov5.models.common import DetectMultiBackend
 from yolov5.utils.dataloaders import LoadImages, LoadStreams
 from yolov5.utils.general import check_img_size, non_max_suppression, scale_boxes
 from yolov5.utils.plots import Annotator, colors
 from yolov5.utils.torch_utils import select_device
 
-# ✅ Hàm letterbox chuẩn xác – fix lệch box
 def letterbox_fixed(img, new_shape=(320, 320), color=(114, 114, 114)):
-    shape = img.shape[:2]  # height, width
+    """
+    Thay đổi kích thước ảnh và thêm padding để giữ tỷ lệ khung hình.
+    
+    Tham số:
+        img: Ảnh đầu vào
+        new_shape: Kích thước mới (chiều rộng, chiều cao)
+        color: Màu padding (BGR)
+    
+    Trả về:
+        Ảnh đã resize với padding, tỷ lệ scale, và giá trị padding
+    """
+    shape = img.shape[:2]  # chiều cao, chiều rộng
     r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
     new_unpad = (int(round(shape[1] * r)), int(round(shape[0] * r)))
     dw = new_shape[1] - new_unpad[0]
@@ -51,33 +67,85 @@ def letterbox_fixed(img, new_shape=(320, 320), color=(114, 114, 114)):
     img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
     return img, r, dw, dh
 
+def play_sound_file(audio_path):
+    """
+    Phát file âm thanh một cách an toàn với xử lý lỗi.
+    
+    Tham số:
+        audio_path: Đường dẫn đến file âm thanh
+    """
+    if not HAS_PLAYSOUND:
+        return
+        
+    try:
+        # Chuyển đổi thành đường dẫn tuyệt đối và xóa tiền tố file://
+        audio_path = os.path.abspath(audio_path)
+        if audio_path.startswith('file:'):
+            audio_path = audio_path[7:]
+        elif audio_path.startswith('file:///'):
+            audio_path = audio_path[8:]
+            
+        # Kiểm tra file có tồn tại không
+        if not os.path.exists(audio_path):
+            print(f"Warning: Sound file not found: {audio_path}")
+            return
+            
+        # Trên macOS, sử dụng afplay thay vì playsound để tương thích tốt hơn
+        if sys.platform == 'darwin':
+            import subprocess
+            subprocess.Popen(['afplay', audio_path])
+        else:
+            # Sử dụng chuỗi thô để tránh vấn đề với đường dẫn
+            audio_path = str(audio_path)
+            print(f"Playing sound: {audio_path}")
+            threading.Thread(target=playsound, args=(audio_path,), daemon=True).start()
+    except Exception as e:
+        print(f"Error playing sound: {str(e)}")
+
 class TrafficSignDetector(QMainWindow):
+    """
+    Cửa sổ chính của ứng dụng nhận diện biển báo giao thông.
+    
+    Lớp này triển khai một ứng dụng GUI có thể:
+    - Nhận diện biển báo giao thông theo thời gian thực từ camera hoặc file video
+    - Hiển thị kết quả nhận diện với khung bao quanh
+    - Phát âm thanh cảnh báo cho các biển báo quan trọng
+    - Ghi lại video với các nhận diện
+    - Hiển thị thống kê và cảnh báo
+    """
+    
     def __init__(self):
+        """Khởi tạo cửa sổ ứng dụng và các thành phần của nó."""
         super().__init__()
         self.setWindowTitle("Traffic Sign Detection")
         self.setGeometry(100, 100, 1400, 800)
         
-        # Initialize text-to-speech engine
+        # Khởi tạo engine text-to-speech cho cảnh báo bằng giọng nói
         self.engine = pyttsx3.init()
         self.engine.setProperty('rate', 150)  # Tốc độ nói
         self.engine.setProperty('volume', 1.0)  # Âm lượng
         
-        # Initialize YOLOv5 model
-        self.device = select_device('')
+        # Khởi tạo model YOLOv5 cho việc nhận diện biển báo
+        self.device = select_device('')  # Sử dụng CPU hoặc GPU
         self.model = DetectMultiBackend('weights/best_2.pt', device=self.device)
         self.stride = self.model.stride
         self.imgsz = check_img_size((640, 640), s=self.stride)
         
-        # Initialize video capture and recording
-        self.cap = None
-        self.video_writer = None
-        self.timer = QTimer()
+        # Khởi tạo các thành phần xử lý video
+        self.cap = None  # Đối tượng bắt video
+        self.video_writer = None  # Đối tượng ghi video
+        self.timer = QTimer()  # Bộ đếm thời gian cho việc cập nhật frame
         self.timer.timeout.connect(self.update_frame)
-        self.is_paused = False  # Thêm biến để theo dõi trạng thái pause
+        self.is_paused = False  # Trạng thái tạm dừng
         
-        # Initialize statistics
-        self.sign_stats = defaultdict(int)
-        self.sign_positions = defaultdict(list)  # Lưu các vị trí đã đếm cho từng loại biển báo
+        # Khởi tạo theo dõi thống kê
+        self.sign_stats = defaultdict(int)  # Đếm số lượng mỗi loại biển báo
+        self.sign_positions = defaultdict(list)  # Vị trí các biển báo đã phát hiện
+        self.played_labels = {}  # Theo dõi thời gian phát âm thanh cuối cùng của mỗi biển báo
+        self.cooldown = 5  # Thời gian chờ giữa các lần phát âm thanh (giây)
+        
+        # Định nghĩa các biển báo quan trọng và tên tiếng Việt của chúng
+        # Các biển báo này sẽ kích hoạt cảnh báo âm thanh khi được phát hiện
         self.important_signs = {
             'cam re trai': 'CẤM RẼ TRÁI',
             'cam re phai': 'CẤM RẼ PHẢI',
@@ -95,26 +163,14 @@ class TrafficSignDetector(QMainWindow):
             'duong giao nhau': 'ĐƯỜNG GIAO NHAU',
             'giao nhau voi duong uu tien': 'GIAO NHAU VỚI ĐƯỜNG ƯU TIÊN',
             'giao nhau voi duong khong uu tien': 'GIAO NHAU VỚI ĐƯỜNG KHÔNG ƯU TIÊN',
-            'noi giao nhau theo vong xuyen': 'GIAO NHAU VÒNG XUYÊN',
-            'background': None
+            'noi giao nhau theo vong xuyen': 'GIAO NHAU VÒNG XUYÊN'
         }
         
-        # Thêm biến để theo dõi thời gian phát âm cuối cùng của từng nhãn
-        self.played_labels = {}
-        self.cooldown = 5  # thời gian chờ (giây) để phát lại âm thanh
-        
-        # Mapping từ label đến file âm thanh
-        self.label_to_audio_file = {
-            "Toc do toi da 40 km/h": "40kmh.wav",
-            "toc do toi da 60 km/h": "60kmh.wav",
-            "toc do toi da 80 km/h": "80kmh.wav",
-            # Thêm các mapping khác nếu cần
-        }
-        
-        # Initialize UI
+        # Khởi tạo giao diện người dùng
         self.init_ui()
         
     def init_ui(self):
+        """Initialize the user interface."""
         # Apply dark theme and modern styles
         self.setStyleSheet('''
             QMainWindow {
@@ -155,13 +211,16 @@ class TrafficSignDetector(QMainWindow):
                 margin-top: 10px;
             }
         ''')
+        
         # Create central widget and layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QHBoxLayout(central_widget)
+        
         # Left panel for video display
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
+        
         # Video display label
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
@@ -172,18 +231,22 @@ class TrafficSignDetector(QMainWindow):
             border: 2px solid #44475a;
         ''')
         left_layout.addWidget(self.video_label)
+        
         # Video info label
         self.info_label = QLabel("Video Info: Not started")
         self.info_label.setStyleSheet('font-size: 15px; color: #8be9fd;')
         left_layout.addWidget(self.info_label)
+        
         # Right panel for controls
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
+        
         # Title
         title = QLabel("Traffic Sign Detection")
         title.setObjectName("TitleLabel")
         title.setAlignment(Qt.AlignCenter)
         right_layout.addWidget(title)
+        
         # Source selection
         source_layout = QHBoxLayout()
         self.source_combo = QComboBox()
@@ -191,6 +254,7 @@ class TrafficSignDetector(QMainWindow):
         source_layout.addWidget(QLabel("Source:"))
         source_layout.addWidget(self.source_combo)
         right_layout.addLayout(source_layout)
+        
         # Camera selection
         camera_layout = QHBoxLayout()
         self.camera_combo = QComboBox()
@@ -198,7 +262,8 @@ class TrafficSignDetector(QMainWindow):
         camera_layout.addWidget(QLabel("Camera:"))
         camera_layout.addWidget(self.camera_combo)
         right_layout.addLayout(camera_layout)
-        # Buttons
+        
+        # Control buttons
         self.start_button = QPushButton("Start")
         self.start_button.clicked.connect(self.start_detection)
         right_layout.addWidget(self.start_button)
@@ -217,6 +282,7 @@ class TrafficSignDetector(QMainWindow):
         self.record_button.clicked.connect(self.toggle_recording)
         self.record_button.setEnabled(False)
         right_layout.addWidget(self.record_button)
+        
         # Detection settings
         settings_layout = QHBoxLayout()
         self.conf_thres = QComboBox()
@@ -224,6 +290,7 @@ class TrafficSignDetector(QMainWindow):
         settings_layout.addWidget(QLabel("Confidence:"))
         settings_layout.addWidget(self.conf_thres)
         right_layout.addLayout(settings_layout)
+        
         # Statistics display
         self.stats_label = QLabel("Sign Statistics:")
         self.stats_label.setStyleSheet('font-size: 17px; color: #ffb86c; font-weight: bold;')
@@ -232,6 +299,7 @@ class TrafficSignDetector(QMainWindow):
         self.stats_text.setReadOnly(True)
         self.stats_text.setMaximumHeight(150)
         right_layout.addWidget(self.stats_text)
+        
         # Alerts display
         self.alerts_label = QLabel("Important Sign Alerts:")
         self.alerts_label.setStyleSheet('font-size: 17px; color: #ff5555; font-weight: bold;')
@@ -240,6 +308,7 @@ class TrafficSignDetector(QMainWindow):
         self.alerts_text.setReadOnly(True)
         self.alerts_text.setMaximumHeight(150)
         right_layout.addWidget(self.alerts_text)
+        
         # Add panels to main layout
         layout.addWidget(left_panel, stretch=2)
         layout.addWidget(right_panel, stretch=1)
@@ -347,25 +416,14 @@ class TrafficSignDetector(QMainWindow):
                     alert = f"ALERT: {self.important_signs[important_sign]} detected! (Confidence: {conf:.2f})"
                     if alert not in alerts:
                         alerts.append(alert)
-                        # Thông báo qua loa
-                        try:
-                            self.engine.say(f"Chú ý! {self.important_signs[important_sign]}")
-                            self.engine.runAndWait()
-                        except Exception as e:
-                            print(f"Error in text-to-speech: {str(e)}")
-                        # Phát âm thanh từ file .wav
+                        
                         if (sign_name not in self.played_labels) or (current_time - self.played_labels[sign_name] > self.cooldown):
-                            audio_path = f"sounds_wav/{sign_name}.wav"
-                            if os.path.exists(audio_path) and HAS_PLAYSOUND:
-                                try:
-                                    threading.Thread(target=playsound, args=(audio_path,), daemon=True).start()
-                                    self.played_labels[sign_name] = current_time
-                                except Exception as e:
-                                    print(f"Error playing sound: {str(e)}")
-                            elif not HAS_PLAYSOUND:
-                                print(f"Sound playback disabled. File exists: {audio_path}")
-                            else:
-                                print(f"Sound file not found: {audio_path}")
+                            # Chỉ phát âm thanh cho biển báo quan trọng
+                            if sign_name.lower() in self.important_signs:
+                                audio_path = os.path.abspath(os.path.join('sounds_wav', f"{sign_name}.wav"))
+                                print(f"Playing important sign sound: {audio_path}")
+                                play_sound_file(audio_path)
+                                self.played_labels[sign_name] = current_time
         if alerts:
             self.alerts_text.setText("\n".join(alerts))
         
@@ -465,26 +523,7 @@ class TrafficSignDetector(QMainWindow):
                     label = f'{label_name} {conf:.2f}'
                     annotator.box_label(xyxy, label, color=colors(c, True))
                     
-                    # Phát âm thanh nếu là biển báo quan trọng
-                    current_time = time.time()
-                    if (label_name not in self.played_labels) or (current_time - self.played_labels[label_name] > self.cooldown):
-                        # Thử phát âm thanh từ file .wav
-                        filename = self.label_to_audio_file.get(label_name, f"{label_name}.wav")
-                        audio_path = os.path.join('sounds_wav', filename)
-                        if os.path.exists(audio_path) and HAS_PLAYSOUND:
-                            try:
-                                threading.Thread(target=playsound, args=(audio_path,), daemon=True).start()
-                                self.played_labels[label_name] = current_time
-                            except Exception as e:
-                                print(f"Error playing sound: {str(e)}")
-                        # Nếu không có file âm thanh, sử dụng text-to-speech
-                        elif label_name.lower() in self.important_signs:
-                            try:
-                                self.engine.say(f"Chú ý! {self.important_signs[label_name.lower()]}")
-                                self.engine.runAndWait()
-                                self.played_labels[label_name] = current_time
-                            except Exception as e:
-                                print(f"Error in text-to-speech: {str(e)}")
+                   
                 
                 frame = annotator.result()
                 self.update_statistics(det)
